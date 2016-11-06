@@ -17,7 +17,8 @@ var (
 )
 
 func initDB() error {
-	db, err := sql.Open("postgres",
+	var err error
+	db, err = sql.Open("postgres",
 		`host=192.168.209.128
 			user=postgres
 			password=Changeme_123
@@ -25,7 +26,7 @@ func initDB() error {
 			sslmode=disable`)
 
 	if err != nil {
-		log.Error("init db error. error=", err)
+		log.Error("init db error. error=%s", err)
 		db = nil
 
 		return errors.New("init db error.")
@@ -44,11 +45,11 @@ func main() {
 	log.Info("test begin")
 
 	//抓取异常
-	defer func() {
-		if r := recover(); r != nil {
-			log.Error("Recovered in f", r)
-		}
-	}()
+	// defer func() {
+	// 	if r := recover(); r != nil {
+	// 		log.Error("Recovered in %s", r)
+	// 	}
+	// }()
 
 	//初始化数据库
 	err := initDB()
@@ -56,30 +57,48 @@ func main() {
 		log.Error("init db error. program will exit.")
 		return
 	}
-	defer db.Close()
+	defer func() {
+		if db != nil {
+			db.Close()
+		}
+	}()
 
-	total := 10000
+	total := 10000000
 	index := 1
 	sqlBuf := bytes.NewBufferString("")
-	manageId := uint64(10000000000001706277)
+	manageId := uint64(10000000000001709275)
 	dataId := uint64(100)
 	rand.Seed(time.Now().Unix())
 	start := time.Now()
 
-	for i := 0; i < total; i++ {
-		tx, _ := db.Begin()
+	for index <= total {
+		manageId += 1
+
+		//开始事物
+		tx, err := db.Begin()
+		if err != nil {
+			log.Error("begin transcation error, programe will exit. err=%s", err)
+			panic(err)
+		}
 
 		dataId = uint64(100)
-		for j := 0; i < 100 && index <= total; j++ {
+		for j := 0; j < 20 && index <= total; j++ {
 			sqlBuf.Truncate(0)
+			sqlBuf.WriteString("insert into hisdata1(manage_id,data_id,val,record_time) values ")
+			for k := 0; k < 50 && index <= total; k++ {
+				if k > 0 {
+					sqlBuf.WriteString(",")
+				}
+				sqlBuf.WriteString("(")
+				sqlBuf.WriteString(strconv.FormatUint(manageId, 10) + ",")
+				sqlBuf.WriteString(strconv.FormatUint(dataId, 10) + ",")
+				sqlBuf.WriteString(strconv.Itoa(rand.Intn(200)) + ",")
+				sqlBuf.WriteString("'" + time.Unix(time.Now().Unix(), 0).Format("2006-01-02 15:04:05") + "'")
+				sqlBuf.WriteString(")")
 
-			sqlBuf.WriteString("insert into table (manage_id,data_id,val,record_time) values ")
-			sqlBuf.WriteString("(")
-			sqlBuf.WriteString(strconv.FormatUint(manageId, 10))
-			sqlBuf.WriteString(strconv.FormatUint(dataId, 10))
-			sqlBuf.WriteString(strconv.Itoa(rand.Intn(200)))
-			sqlBuf.WriteString("'" + time.Unix(time.Now().Unix(), 0).Format("2006-01-02 15:04:05") + "'")
-			sqlBuf.WriteString(")")
+				dataId += 1
+				index += 1
+			}
 
 			stmt, err := tx.Prepare(sqlBuf.String())
 			if err != nil {
@@ -91,17 +110,28 @@ func main() {
 			_, err = stmt.Exec()
 			if err != nil {
 				log.Error("exec sql statment error. error=%s \nsql=%s", err, sqlBuf.String())
-				tx.Rollback()
-				panic(err)
+				break
 			}
 
-			tx.Commit()
-
 		}
+
+		if err != nil {
+			log.Error("has error, rollback execute sql. error=%s", err)
+			tx.Rollback()
+			panic(err)
+		} else {
+			tx.Commit()
+		}
+
 		manageId += 1
 	}
 
 	end := time.Now()
+	elapsed := end.Sub(start).Seconds()
+	if elapsed < 1 {
+		elapsed = 1
+	}
 
-	log.Info("test end. insert %d datas, Elapsed %d second.", total, end.Sub(start).Seconds())
+	log.Info("end insert test.\ninsert %d datas\nElapsed %10.3f second\n%d data per second",
+		total, elapsed, total/int(elapsed))
 }
