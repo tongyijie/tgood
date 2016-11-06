@@ -2,15 +2,21 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
-	"fmt"
+	"errors"
+	log "github.com/alecthomas/log4go"
 	_ "github.com/lib/pq"
+	"math/rand"
 	"strconv"
 	"time"
 )
 
-func main() {
+var (
+	db *sql.DB
+)
 
+func initDB() error {
 	db, err := sql.Open("postgres",
 		`host=192.168.209.128
 			user=postgres
@@ -19,30 +25,83 @@ func main() {
 			sslmode=disable`)
 
 	if err != nil {
-		fmt.Println(err)
+		log.Error("init db error. error=", err)
+		db = nil
+
+		return errors.New("init db error.")
 	}
 
-	age := 2
-	r, err := db.Query("SELECT name,age FROM USERS WHERE age > $1", age)
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(4)
+
+	return nil
+}
+
+func main() {
+	log.LoadConfiguration("log4go.xml")
+	defer log.Close()
+
+	log.Info("test begin")
+
+	//抓取异常
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("Recovered in f", r)
+		}
+	}()
+
+	//初始化数据库
+	err := initDB()
 	if err != nil {
-		fmt.Println(err)
+		log.Error("init db error. program will exit.")
+		return
 	}
-	defer r.Close()
+	defer db.Close()
 
-	for r.Next() {
-		var name string
-		var age int
-		_ = r.Scan(&name, &age)
+	total := 10000
+	index := 1
+	sqlBuf := bytes.NewBufferString("")
+	manageId := uint64(10000000000001706277)
+	dataId := uint64(100)
+	rand.Seed(time.Now().Unix())
+	start := time.Now()
 
-		fmt.Printf("%s  %d\n", name, age)
+	for i := 0; i < total; i++ {
+		tx, _ := db.Begin()
+
+		dataId = uint64(100)
+		for j := 0; i < 100 && index <= total; j++ {
+			sqlBuf.Truncate(0)
+
+			sqlBuf.WriteString("insert into table (manage_id,data_id,val,record_time) values ")
+			sqlBuf.WriteString("(")
+			sqlBuf.WriteString(strconv.FormatUint(manageId, 10))
+			sqlBuf.WriteString(strconv.FormatUint(dataId, 10))
+			sqlBuf.WriteString(strconv.Itoa(rand.Intn(200)))
+			sqlBuf.WriteString("'" + time.Unix(time.Now().Unix(), 0).Format("2006-01-02 15:04:05") + "'")
+			sqlBuf.WriteString(")")
+
+			stmt, err := tx.Prepare(sqlBuf.String())
+			if err != nil {
+				log.Error("prepare sql statment error. error=%s \nsql=%s", err, sqlBuf.String())
+				tx.Rollback()
+				panic(err)
+			}
+
+			_, err = stmt.Exec()
+			if err != nil {
+				log.Error("exec sql statment error. error=%s \nsql=%s", err, sqlBuf.String())
+				tx.Rollback()
+				panic(err)
+			}
+
+			tx.Commit()
+
+		}
+		manageId += 1
 	}
 
-	fmt.Println(time.Unix(time.Now().Unix(), 0).Format("2006-01-02 15:04:05"))
-	var a uint64
-	a = 10000000000
-	fmt.Println(strconv.FormatUint(a, 10))
+	end := time.Now()
 
-	if 1 > 0 && 10 > 0 {
-		fmt.Println("ok")
-	}
+	log.Info("test end. insert %d datas, Elapsed %d second.", total, end.Sub(start).Seconds())
 }
